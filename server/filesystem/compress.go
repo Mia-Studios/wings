@@ -31,7 +31,7 @@ import (
 // All paths are relative to the dir that is passed in as the first argument,
 // and the compressed file will be placed at that location named
 // `archive-{date}.tar.gz`.
-func (fs *Filesystem) CompressFiles(dir string, paths []string) (os.FileInfo, error) {
+func (fs *Filesystem) CompressFiles(dir string, paths []string, uuid string) (os.FileInfo, error) {
 	cleanedRootDir, err := fs.SafePath(dir)
 	if err != nil {
 		return nil, err
@@ -48,9 +48,10 @@ func (fs *Filesystem) CompressFiles(dir string, paths []string) (os.FileInfo, er
 	}
 
 	a := &Archive{BasePath: cleanedRootDir, Files: cleaned}
+
 	d := path.Join(
 		cleanedRootDir,
-		fmt.Sprintf("archive-%s.tar.gz", strings.ReplaceAll(time.Now().Format(time.RFC3339), ":", "")),
+		fmt.Sprintf("%s-%s.zip", uuid, strings.ReplaceAll(time.Now().Format(time.RFC3339), ":", "")),
 	)
 
 	if err := a.Create(context.Background(), d); err != nil {

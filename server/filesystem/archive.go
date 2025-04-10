@@ -1,7 +1,7 @@
 package filesystem
 
 import (
-	"archive/tar"
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -15,7 +15,6 @@ import (
 	"github.com/apex/log"
 	"github.com/juju/ratelimit"
 	"github.com/karrick/godirwalk"
-	"github.com/klauspost/pgzip"
 	ignore "github.com/sabhiram/go-gitignore"
 
 	"github.com/pterodactyl/wings/config"
@@ -31,25 +30,25 @@ var pool = sync.Pool{
 	},
 }
 
-// TarProgress .
-type TarProgress struct {
-	*tar.Writer
+// ZipProgress .
+type ZipProgress struct {
+	*zip.Writer
 	p *progress.Progress
 }
 
-// NewTarProgress .
-func NewTarProgress(w *tar.Writer, p *progress.Progress) *TarProgress {
+// NewZipProgress .
+func NewZipProgress(w *zip.Writer, p *progress.Progress) *ZipProgress {
 	if p != nil {
 		p.Writer = w
 	}
-	return &TarProgress{
+	return &ZipProgress{
 		Writer: w,
 		p:      p,
 	}
 }
 
 // Write .
-func (p *TarProgress) Write(v []byte) (int, error) {
+func (p *ZipProgress) Write(v []byte) (int, error) {
 	if p.p == nil {
 		return p.Writer.Write(v)
 	}
@@ -108,29 +107,10 @@ func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("archive: all entries in Files must be absolute and within BasePath: %s\n", f)
 	}
 
-	// Choose which compression level to use based on the compression_level configuration option
-	var compressionLevel int
-	switch config.Get().System.Backups.CompressionLevel {
-	case "none":
-		compressionLevel = pgzip.NoCompression
-	case "best_compression":
-		compressionLevel = pgzip.BestCompression
-	case "best_speed":
-		fallthrough
-	default:
-		compressionLevel = pgzip.BestSpeed
-	}
-
-	// Create a new gzip writer around the file.
-	gw, _ := pgzip.NewWriterLevel(w, compressionLevel)
-	_ = gw.SetConcurrency(1<<20, 1)
-	defer gw.Close()
-
-	// Create a new tar writer around the gzip writer.
-	tw := tar.NewWriter(gw)
+	tw := zip.NewWriter(w) // use the writer directly here
 	defer tw.Close()
 
-	pw := NewTarProgress(tw, a.Progress)
+	pw := NewZipProgress(tw, a.Progress)
 
 	// Configure godirwalk.
 	options := &godirwalk.Options{
@@ -174,7 +154,7 @@ func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 
 // Callback function used to determine if a given file should be included in the archive
 // being generated.
-func (a *Archive) callback(tw *TarProgress, opts ...func(path string, relative string) error) func(path string, de *godirwalk.Dirent) error {
+func (a *Archive) callback(tw *ZipProgress, opts ...func(path string, relative string) error) func(path string, de *godirwalk.Dirent) error {
 	return func(path string, de *godirwalk.Dirent) error {
 		// Skip directories because we are walking them recursively.
 		if de.IsDir() {
@@ -198,7 +178,7 @@ func (a *Archive) callback(tw *TarProgress, opts ...func(path string, relative s
 }
 
 // Pushes only files defined in the Files key to the final archive.
-func (a *Archive) withFilesCallback(tw *TarProgress) func(path string, de *godirwalk.Dirent) error {
+func (a *Archive) withFilesCallback(tw *ZipProgress) func(path string, de *godirwalk.Dirent) error {
 	return a.callback(tw, func(p string, rp string) error {
 		for _, f := range a.Files {
 			// Allow exact file matches, otherwise check if file is within a parent directory.
@@ -221,7 +201,7 @@ func (a *Archive) withFilesCallback(tw *TarProgress) func(path string, de *godir
 }
 
 // Adds a given file path to the final archive being created.
-func (a *Archive) addToArchive(p string, rp string, w *TarProgress) error {
+func (a *Archive) addToArchive(p string, rp string, w *ZipProgress) error {
 	// Lstat the file, this will give us the same information as Stat except that it will not
 	// follow a symlink to its target automatically. This is important to avoid including
 	// files that exist outside the server root unintentionally in the backup.
@@ -233,20 +213,20 @@ func (a *Archive) addToArchive(p string, rp string, w *TarProgress) error {
 		return errors.WrapIff(err, "failed executing os.Lstat on '%s'", rp)
 	}
 
-	// Skip socket files as they are unsupported by archive/tar.
-	// Error will come from tar#FileInfoHeader: "archive/tar: sockets not supported"
+	// Skip socket files as they are unsupported by archive/zip.
+	// Error will come from zip#FileInfoHeader: "archive/zip: sockets not supported"
 	if s.Mode()&fs.ModeSocket != 0 {
 		return nil
 	}
 
 	// Resolve the symlink target if the file is a symlink.
-	var target string
+	var _ string
 	if s.Mode()&fs.ModeSymlink != 0 {
 		// Read the target of the symlink. If there are any errors we will dump them out to
 		// the logs, but we're not going to stop the backup. There are far too many cases of
 		// symlinks causing all sorts of unnecessary pain in this process. Sucks to suck if
 		// it doesn't work.
-		target, err = os.Readlink(s.Name())
+		_, err = os.Readlink(s.Name())
 		if err != nil {
 			// Ignore the not exist errors specifically, since there is nothing important about that.
 			if !os.IsNotExist(err) {
@@ -256,10 +236,10 @@ func (a *Archive) addToArchive(p string, rp string, w *TarProgress) error {
 		}
 	}
 
-	// Get the tar FileInfoHeader in order to add the file to the archive.
-	header, err := tar.FileInfoHeader(s, filepath.ToSlash(target))
+	// Get the zip FileInfoHeader in order to add the file to the archive.
+	header, err := zip.FileInfoHeader(s)
 	if err != nil {
-		return errors.WrapIff(err, "failed to get tar#FileInfoHeader for '%s'", rp)
+		return errors.WrapIff(err, "failed to get zip#FileInfoHeader for '%s'", rp)
 	}
 
 	// Fix the header name if the file is not a symlink.
@@ -267,20 +247,20 @@ func (a *Archive) addToArchive(p string, rp string, w *TarProgress) error {
 		header.Name = rp
 	}
 
-	// Write the tar FileInfoHeader to the archive.
-	if err := w.WriteHeader(header); err != nil {
-		return errors.WrapIff(err, "failed to write tar#FileInfoHeader for '%s'", rp)
+	// Write the zip FileInfoHeader to the archive.
+	if _, err := w.CreateHeader(header); err != nil {
+		return errors.WrapIff(err, "failed to write zip#FileInfoHeader for '%s'", rp)
 	}
 
 	// If the size of the file is less than 1 (most likely for symlinks), skip writing the file.
-	if header.Size < 1 {
+	if header.FileInfo().Size() < 1 {
 		return nil
 	}
 
 	// If the buffer size is larger than the file size, create a smaller buffer to hold the file.
 	var buf []byte
-	if header.Size < memory {
-		buf = make([]byte, header.Size)
+	if header.FileInfo().Size() < memory {
+		buf = make([]byte, header.FileInfo().Size())
 	} else {
 		// Get a fixed-size buffer from the pool to save on allocations.
 		buf = pool.Get().([]byte)
@@ -301,7 +281,7 @@ func (a *Archive) addToArchive(p string, rp string, w *TarProgress) error {
 	defer f.Close()
 
 	// Copy the file's contents to the archive using our buffer.
-	if _, err := io.CopyBuffer(w, io.LimitReader(f, header.Size), buf); err != nil {
+	if _, err := io.CopyBuffer(w, io.LimitReader(f, header.FileInfo().Size()), buf); err != nil {
 		return errors.WrapIff(err, "failed to copy '%s' to archive", header.Name)
 	}
 
