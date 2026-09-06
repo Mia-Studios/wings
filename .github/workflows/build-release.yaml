@@ -1,0 +1,136 @@
+name: Build release
+
+# Builds the linux/amd64 binary of the Latte fork and pushes it to GHCR as an
+# OCI artifact, tagged with the commit SHA:
+#
+#   ghcr.io/latte-studios/wings-release:<sha>
+#
+# The artifact is pushed with oras and is a bare binary, not a container image:
+# the node runs Wings as a systemd unit installed from the official guide, and
+# the deploy pipeline (Latte-Studios/pterodactyl-deploy) swaps that binary in
+# place. The upstream docker.yaml in this repository still builds the image on
+# `develop` and on releases, neither of which the fork uses.
+#
+# The version baked in is whatever system/const.go says; the SHA is what
+# identifies the build, both in the tag and in the artifact's annotations.
+#
+# A push to latte-main also triggers the production deploy, through the
+# `deploy` job below, using a PAT with actions:write on pterodactyl-deploy
+# (secret DEPLOY_TRIGGER_TOKEN). A manual dispatch only builds.
+
+on:
+  push:
+    branches: [latte-main]
+  workflow_dispatch:
+
+concurrency:
+  # Not cancel-in-progress: a half-pushed artifact is worse than a redundant build.
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  ARTIFACT: latte-studios/wings-release
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.11
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^var Version = "\(.*\)"$/\1/p' system/const.go)"
+          [ -n "$version" ] || { echo "::error::could not read the version from system/const.go"; exit 1; }
+          echo "building wings $version from $GITHUB_SHA"
+          go build -v -trimpath \
+            -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${version}" \
+            -o dist/wings_linux_amd64 \
+            github.com/pterodactyl/wings
+          chmod 755 dist/wings_linux_amd64
+          dist/wings_linux_amd64 version
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Setup oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      # The commit SHA is the only tag a deploy is allowed to pin, so it is
+      # always pushed. `latte-main` follows the branch for humans reading the
+      # package page; the deploy workflow refuses it.
+      - name: Push artifact
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ref="$REGISTRY/$ARTIFACT"
+          oras push "$ref:$GITHUB_SHA" \
+            --artifact-type application/vnd.latte-studios.wings.binary \
+            --annotation "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --annotation "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "org.opencontainers.image.version=$version" \
+            wings_linux_amd64:application/octet-stream
+          if [ "$GITHUB_REF" = "refs/heads/latte-main" ]; then
+            oras tag "$ref:$GITHUB_SHA" latte-main
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo
+            echo '```'
+            echo "$REGISTRY/$ARTIFACT:$GITHUB_SHA  (wings $version)"
+            echo '```'
+            echo
+            echo "Deploy it with:"
+            echo
+            echo '```'
+            echo "gh workflow run deploy-production.yml --repo Latte-Studios/pterodactyl-deploy -f wings_tag=$GITHUB_SHA -f panel_tag=keep"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The deploy itself stays in pterodactyl-deploy — this job only hands it the
+  # immutable SHA that was just pushed. The Environment over there can require
+  # a reviewer before anything touches the host.
+  deploy:
+    name: Trigger deploy
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch deploy workflow
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_TRIGGER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::DEPLOY_TRIGGER_TOKEN is not set. The artifact was pushed, but nothing was deployed. Create a fine-grained PAT with actions:write on Latte-Studios/pterodactyl-deploy and add it as a repository secret."
+            exit 1
+          fi
+          echo "dispatching deploy-production.yml with wings_tag=${GITHUB_SHA}"
+          gh workflow run deploy-production.yml \
+            --repo Latte-Studios/pterodactyl-deploy \
+            -f "wings_tag=${GITHUB_SHA}" \
+            -f panel_tag=keep
