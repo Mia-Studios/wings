@@ -79,20 +79,20 @@ func (s *Sampler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	s.collect()
+	s.Collect()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.collect()
+			s.Collect()
 		}
 	}
 }
 
-// collect takes a single sample and publishes it.
-func (s *Sampler) collect() {
+// Collect takes a single sample and publishes it. Run calls this on every tick.
+func (s *Sampler) Collect() {
 	snapshot, err := s.sample()
 	if err != nil {
 		log.WithField("subsystem", "host_monitor").WithField("error", err).

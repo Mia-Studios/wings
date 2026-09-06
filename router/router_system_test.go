@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/hoststats"
 	"github.com/pterodactyl/wings/server"
 )
 
@@ -51,5 +52,57 @@ func TestPostUpdateConfigurationRotatesCredentials(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected client credentials to be rotated")
+	}
+}
+
+func TestGetSystemUtilizationWithoutMonitor(t *testing.T) {
+	hoststats.Set(nil)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("GET", "/api/system/utilization", nil)
+
+	getSystemUtilization(c)
+
+	if recorder.Code != 503 {
+		t.Fatalf("expected a 503 when the monitor is disabled, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "host monitor disabled") {
+		t.Fatalf("expected the body to explain why, got %q", recorder.Body.String())
+	}
+}
+
+func TestGetSystemUtilizationBeforeFirstSample(t *testing.T) {
+	hoststats.Set(hoststats.New(config.HostMonitor{Enabled: true, Interval: 2}, func() []hoststats.ServerUsage { return nil }, ""))
+	t.Cleanup(func() { hoststats.Set(nil) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("GET", "/api/system/utilization", nil)
+
+	getSystemUtilization(c)
+
+	if recorder.Code != 204 {
+		t.Fatalf("expected a 204 before the first sample, got %d", recorder.Code)
+	}
+}
+
+func TestGetSystemUtilizationReturnsSnapshot(t *testing.T) {
+	sampler := hoststats.New(config.HostMonitor{Enabled: true, Interval: 2}, func() []hoststats.ServerUsage { return nil }, "")
+	sampler.Collect()
+	hoststats.Set(sampler)
+	t.Cleanup(func() { hoststats.Set(nil) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("GET", "/api/system/utilization", nil)
+
+	getSystemUtilization(c)
+
+	if recorder.Code != 200 {
+		t.Fatalf("expected a 200 once a sample exists, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"pressure"`) {
+		t.Fatalf("expected a snapshot in the body, got %q", recorder.Body.String())
 	}
 }

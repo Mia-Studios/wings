@@ -11,6 +11,7 @@ import (
 	"github.com/pterodactyl/wings/router/tokens"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/hoststats"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/installer"
@@ -43,6 +44,26 @@ func getSystemInformation(c *gin.Context) {
 		OS:            i.System.OSType,
 		Version:       i.Version,
 	})
+}
+
+// Returns the current utilization of the machine this Wings instance is running
+// on. This is only ever called by the Panel, which proxies it to administrators.
+func getSystemUtilization(c *gin.Context) {
+	sampler := hoststats.Get()
+	if sampler == nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error": "host monitor disabled",
+		})
+		return
+	}
+
+	snapshot := sampler.Latest()
+	if snapshot == nil {
+		c.AbortWithStatus(http.StatusNoContent)
+		return
+	}
+
+	c.JSON(http.StatusOK, snapshot)
 }
 
 // Returns all the servers that are registered and configured correctly on
