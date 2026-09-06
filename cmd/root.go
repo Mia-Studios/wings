@@ -30,6 +30,7 @@ import (
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/internal/cron"
 	"github.com/pterodactyl/wings/internal/database"
+	"github.com/pterodactyl/wings/internal/hoststats"
 	"github.com/pterodactyl/wings/loggers/cli"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router"
@@ -152,6 +153,25 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	if err := environment.ConfigureDocker(cmd.Context()); err != nil {
 		log.WithField("error", err).Fatal("failed to configure docker environment")
 		return
+	}
+
+	if hm := config.Get().System.HostMonitor; hm.Enabled {
+		// The Docker root directory is only used to report how full the filesystem
+		// backing the containers is, so failing to resolve it should not stop the
+		// monitor from reporting everything else.
+		var dockerRoot string
+		if c, err := environment.Docker(); err != nil {
+			log.WithField("error", err).Warn("host monitor: failed to resolve the docker root directory")
+		} else if info, err := c.Info(cmd.Context()); err != nil {
+			log.WithField("error", err).Warn("host monitor: failed to resolve the docker root directory")
+		} else {
+			dockerRoot = info.DockerRootDir
+		}
+
+		sampler := hoststats.New(hm, hoststats.FromManager(manager), dockerRoot)
+		hoststats.Set(sampler)
+		go sampler.Run(cmd.Context())
+		log.WithField("interval", hm.Interval).Info("host resource monitor started")
 	}
 
 	if err := config.WriteToDisk(config.Get()); err != nil {

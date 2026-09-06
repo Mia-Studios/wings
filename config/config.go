@@ -252,7 +252,74 @@ type SystemConfiguration struct {
 
 	Transfers Transfers `yaml:"transfers"`
 
+	HostMonitor HostMonitor `yaml:"host_monitor"`
+
 	OpenatMode string `default:"auto" yaml:"openat_mode"`
+}
+
+// HostMonitorThreshold allows the warning and critical percentages to be
+// overridden for a single resource. A value of 0 means "inherit the global
+// value" for that field.
+type HostMonitorThreshold struct {
+	WarningPercent  float64 `default:"0" yaml:"warning_percent"`
+	CriticalPercent float64 `default:"0" yaml:"critical_percent"`
+}
+
+// HostMonitorThresholds holds the per-resource threshold overrides.
+type HostMonitorThresholds struct {
+	Cpu    HostMonitorThreshold `yaml:"cpu"`
+	Memory HostMonitorThreshold `yaml:"memory"`
+	Disk   HostMonitorThreshold `yaml:"disk"`
+}
+
+// HostMonitor controls the collection of host level resource utilization data
+// that is exposed to the Panel over the API and the server websocket.
+type HostMonitor struct {
+	// Enabled controls whether the host resource sampler runs at all. When this
+	// is disabled the utilization endpoint returns a 503 and no events are ever
+	// published over the websocket.
+	Enabled bool `default:"true" yaml:"enabled"`
+
+	// Interval is the number of seconds between two samples of the host state.
+	Interval int `default:"2" yaml:"interval"`
+
+	// WarningPercent is the global utilization percentage at which a resource is
+	// considered to be under pressure.
+	WarningPercent float64 `default:"85" yaml:"warning_percent"`
+
+	// CriticalPercent is the global utilization percentage at which a resource is
+	// considered to be critically saturated.
+	CriticalPercent float64 `default:"95" yaml:"critical_percent"`
+
+	// SamplesToTrigger is the number of consecutive samples above a threshold that
+	// are required before the level of a resource is raised. Lowering a level is
+	// controlled by HysteresisPercent instead.
+	SamplesToTrigger int `default:"3" yaml:"samples_to_trigger"`
+
+	// HysteresisPercent is the number of percentage points below a threshold that a
+	// resource has to drop before its level is lowered again.
+	HysteresisPercent float64 `default:"5" yaml:"hysteresis_percent"`
+
+	// Thresholds optionally overrides the global percentages for a single resource.
+	Thresholds HostMonitorThresholds `yaml:"thresholds"`
+}
+
+// WarningFor returns the warning threshold that applies to the given resource
+// override, falling back to the global value when no override is configured.
+func (h HostMonitor) WarningFor(t HostMonitorThreshold) float64 {
+	if t.WarningPercent > 0 {
+		return t.WarningPercent
+	}
+	return h.WarningPercent
+}
+
+// CriticalFor returns the critical threshold that applies to the given resource
+// override, falling back to the global value when no override is configured.
+func (h HostMonitor) CriticalFor(t HostMonitorThreshold) float64 {
+	if t.CriticalPercent > 0 {
+		return t.CriticalPercent
+	}
+	return h.CriticalPercent
 }
 
 type CrashDetection struct {
