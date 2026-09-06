@@ -130,7 +130,11 @@ jobs:
             exit 1
           fi
           echo "dispatching deploy-production.yml with wings_tag=${GITHUB_SHA}"
+          # --ref is explicit so gh does not have to look the default branch up:
+          # that needs contents:read on the deploy repository, and the PAT only
+          # has actions:write.
           gh workflow run deploy-production.yml \
             --repo Latte-Studios/pterodactyl-deploy \
+            --ref main \
             -f "wings_tag=${GITHUB_SHA}" \
             -f panel_tag=keep
