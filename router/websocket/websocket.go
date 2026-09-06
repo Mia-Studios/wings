@@ -35,6 +35,7 @@ const (
 	PermissionReceiveErrors    = "admin.websocket.errors"
 	PermissionReceiveInstall   = "admin.websocket.install"
 	PermissionReceiveTransfer  = "admin.websocket.transfer"
+	PermissionReceiveHost      = "admin.websocket.host"
 	PermissionReceiveBackups   = "backup.read"
 )
 
@@ -164,6 +165,14 @@ func (h *Handler) SendJson(v Message) error {
 		// If we are sending transfer output, only send it to the user if they have the required permissions.
 		if v.Event == server.TransferLogsEvent {
 			if !j.HasPermission(PermissionReceiveTransfer) {
+				return nil
+			}
+		}
+
+		// Host utilization is only ever relevant to an administrator, and exposes
+		// the state of every other tenant on the machine.
+		if v.Event == HostStatsEvent {
+			if !j.HasPermission(PermissionReceiveHost) {
 				return nil
 			}
 		}

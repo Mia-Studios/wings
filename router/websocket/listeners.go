@@ -9,6 +9,7 @@ import (
 	"emperror.dev/errors"
 
 	"github.com/pterodactyl/wings/events"
+	"github.com/pterodactyl/wings/internal/hoststats"
 	"github.com/pterodactyl/wings/system"
 
 	"github.com/pterodactyl/wings/server"
@@ -78,6 +79,7 @@ var e = []string{
 	server.BackupRestoreCompletedEvent,
 	server.TransferLogsEvent,
 	server.TransferStatusEvent,
+	hoststats.StatsEvent,
 }
 
 // ListenForServerEvents will listen for different events happening on a server
@@ -93,10 +95,21 @@ func (h *Handler) listenForServerEvents(ctx context.Context) error {
 	eventChan := make(chan []byte)
 	logOutput := make(chan []byte, 8)
 	installOutput := make(chan []byte, 4)
+	// hostOutput is only ever fed when the connection belongs to an administrator
+	// that is allowed to see the state of the machine.
+	hostOutput := make(chan []byte, 4)
 
 	h.server.Events().On(eventChan) // TODO: make a sinky
 	h.server.Sink(system.LogSink).On(logOutput)
 	h.server.Sink(system.InstallSink).On(installOutput)
+
+	var host *events.Bus
+	if j := h.GetJwt(); j != nil && j.HasPermission(PermissionReceiveHost) {
+		if sampler := hoststats.Get(); sampler != nil {
+			host = sampler.Bus()
+			host.On(hostOutput)
+		}
+	}
 
 	onError := func(evt string, err2 error) {
 		h.Logger().WithField("event", evt).WithField("error", err2).Error("failed to send event over server websocket")
@@ -125,6 +138,24 @@ func (h *Handler) listenForServerEvents(ctx context.Context) error {
 				continue
 			}
 			onError(server.InstallOutputEvent, sendErr)
+		case b := <-hostOutput:
+			// The host bus carries a full event envelope, so only the data of it is
+			// forwarded to keep the payload identical to the HTTP endpoint.
+			var e events.Event
+			if err := events.DecodeTo(b, &e); err != nil {
+				continue
+			}
+			if e.Topic != hoststats.StatsEvent {
+				continue
+			}
+			data, sendErr := json.Marshal(e.Data)
+			if sendErr == nil {
+				sendErr = h.SendJson(Message{Event: HostStatsEvent, Args: []string{string(data)}})
+				if sendErr == nil {
+					continue
+				}
+			}
+			onError(string(HostStatsEvent), sendErr)
 		case b := <-eventChan:
 			var e events.Event
 			if err := events.DecodeTo(b, &e); err != nil {
@@ -158,6 +189,9 @@ func (h *Handler) listenForServerEvents(ctx context.Context) error {
 	h.server.Events().Off(eventChan)
 	h.server.Sink(system.LogSink).Off(logOutput)
 	h.server.Sink(system.InstallSink).Off(installOutput)
+	if host != nil {
+		host.Off(hostOutput)
+	}
 
 	// If the internal context is stopped it is either because the parent context
 	// got canceled or because we ran into an error. If the "err" variable is nil

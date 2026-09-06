@@ -1,5 +1,7 @@
 package websocket
 
+import "github.com/pterodactyl/wings/internal/hoststats"
+
 type Event string
 
 const (
@@ -14,6 +16,9 @@ const (
 	ErrorEvent                 = Event("daemon error")
 	JwtErrorEvent              = Event("jwt error")
 	ThrottledEvent             = Event("throttled")
+	// HostStatsEvent carries a utilization sample of the machine this server is
+	// running on and is only sent to administrators.
+	HostStatsEvent = Event(hoststats.StatsEvent)
 )
 
 type Message struct {
