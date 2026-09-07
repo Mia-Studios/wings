@@ -190,6 +190,16 @@ func (c *client) SendActivityLogs(ctx context.Context, activity []models.Activit
 	return nil
 }
 
+// SendHostPressure reports a change of the host pressure level to the Panel.
+func (c *client) SendHostPressure(ctx context.Context, change HostPressureRequest) error {
+	resp, err := c.Post(ctx, "/nodes/pressure", change)
+	if err != nil {
+		return errors.WithStackIf(err)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // getServersPaged returns a subset of servers from the Panel API using the
 // pagination query parameters.
 func (c *client) getServersPaged(ctx context.Context, page, limit int) ([]RawServerData, Pagination, error) {

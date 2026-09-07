@@ -172,6 +172,10 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		hoststats.Set(sampler)
 		go sampler.Run(cmd.Context())
 		log.WithField("interval", hm.Interval).Info("host resource monitor started")
+
+		if hm.NotifyPanel {
+			go hoststats.NewNotifier(sampler.Bus(), pclient).Run(cmd.Context())
+		}
 	}
 
 	if err := config.WriteToDisk(config.Get()); err != nil {

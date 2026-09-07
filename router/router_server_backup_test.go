@@ -84,6 +84,10 @@ func (c backupTestRemoteClient) SendActivityLogs(context.Context, []models.Activ
 	return nil
 }
 
+func (c backupTestRemoteClient) SendHostPressure(context.Context, remote.HostPressureRequest) error {
+	return nil
+}
+
 func (c backupTestRemoteClient) SetCredentials(id, token string) {
 	if c.credentials != nil {
 		c.credentials <- [2]string{id, token}

@@ -174,3 +174,12 @@ type InstallStatusRequest struct {
 	Successful bool `json:"successful"`
 	Reinstall  bool `json:"reinstall"`
 }
+
+// HostPressureRequest reports a change of the overall pressure level of the host
+// to the Panel. The snapshot is the full utilization sample the change was
+// resolved from and is forwarded to the webhooks as-is.
+type HostPressureRequest struct {
+	Previous string      `json:"previous"`
+	Current  string      `json:"current"`
+	Snapshot interface{} `json:"snapshot"`
+}

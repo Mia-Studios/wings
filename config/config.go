@@ -302,6 +302,10 @@ type HostMonitor struct {
 
 	// Thresholds optionally overrides the global percentages for a single resource.
 	Thresholds HostMonitorThresholds `yaml:"thresholds"`
+
+	// NotifyPanel controls whether a change of the overall pressure level is
+	// reported to the Panel, which forwards it to the Node Watcher webhooks.
+	NotifyPanel bool `default:"true" yaml:"notify_panel"`
 }
 
 // WarningFor returns the warning threshold that applies to the given resource
